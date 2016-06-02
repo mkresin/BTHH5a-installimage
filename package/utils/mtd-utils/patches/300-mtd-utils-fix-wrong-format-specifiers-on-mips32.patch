@@ -1,0 +1,46 @@
+From 2b961c6e2d71d37a14be20a8f3040228df5aa0a1 Mon Sep 17 00:00:00 2001
+From: Mathias Kresin <dev@kresin.me>
+Date: Sun, 12 Jun 2016 11:42:02 +0200
+Subject: [PATCH] mtd-utils: fix wrong format specifiers on mips32
+
+This patch fixes the follwing compiler warnings:
+
+flash_erase.c: In function 'show_progress':
+flash_erase.c:56:22: warning: format '%lx' expects argument of type 'long unsigned int', but argument 3 has type 'off_t {aka long long int}' [-Wformat=]
+  bareverbose(!quiet, "\rErasing %d Kibyte @ %"PRIxoff_t" -- %2i %% complete ",
+                      ^
+./include/common.h:81:10: note: in definition of macro 'bareverbose'
+   printf(fmt, ##__VA_ARGS__);
+
+which are linked to the following buggy numerical output:
+
+Erasing 128 Kibyte @ 0 -- 917504 % complete flash_erase:  Cleanmarker written at 0
+Erasing 128 Kibyte @ 0 -- 1048576 % complete flash_erase:  Cleanmarker written at 0
+
+Signed-off-by: Mathias Kresin <dev@kresin.me>
+
+---
+
+In case it might be relevant, I'm cross compiling the mtd-utils on
+ubuntu 14.04 x64 using a patched GCC 5.3.0 from the lede project. The
+kernel version used on the mips32 target is 4.4.12.
+
+ include/common.h | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+--- a/include/common.h
++++ b/include/common.h
+@@ -71,8 +71,13 @@ extern "C" {
+ #define PRIxoff_t PRIx64
+ #define PRIdoff_t PRId64
+ #else
++#if (SIZEOF_LONG >= 8)
+ #define PRIxoff_t "l"PRIx32
+ #define PRIdoff_t "l"PRId32
++#else
++#define PRIxoff_t "ll"PRIx32
++#define PRIdoff_t "ll"PRId32
++#endif
+ #endif
+ 
+ /* Verbose messages */

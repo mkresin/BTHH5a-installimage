@@ -1,0 +1,131 @@
+#!/bin/sh
+# Copyright (C) 2016 Mathias Kresin <dev@kresin.me>
+
+. /lib/functions.sh
+
+# bt homehub 5a and plusnet hub one are using different AES256 keys for the env
+UBOOT_ENV_BT_FILE="/data/uboot-env_bt_patched.bin"
+UBOOT_ENV_PN_FILE="/data/uboot-env_pn_patched.bin"
+
+# check for required binaries
+BINARIES="flash_erase nandwrite ubirmvol"
+for BINARY in ${BINARIES}; do
+	[ ! -x $(which ${BINARY}) ] && {
+		echo "${BINARY} not found - are you running the install image?" >&2
+		exit 1
+	}
+done
+
+# make sure expected partitions exist and are writable
+PART_NAME="ubi"
+UBI_PART_INDEX=$(find_mtd_index "${PART_NAME}")
+[ -z "${UBI_PART_INDEX}" ] && {
+	echo "${PART_NAME} partition not found - something is wrong!" >&2
+	exit 1
+}
+
+[ $(cat /sys/class/block/mtdblock${UBI_PART_INDEX}/ro) -eq 1 ] && {
+	echo "${PART_NAME} partition not writable - something is wrong!" >&2
+	exit 1
+}
+
+PART_NAME="uboot-env"
+UBOOT_ENV_PART_INDEX=$(find_mtd_index "${PART_NAME}")
+[ -z "${UBOOT_ENV_PART_INDEX}" ] && {
+	echo "${PART_NAME} partition not found - something is wrong!" >&2
+	exit 1
+}
+
+[ $(cat /sys/class/block/mtdblock${UBOOT_ENV_PART_INDEX}/ro) -eq 1 ] && {
+	echo "${PART_NAME} partition not writable - are you running the install image?" >&2
+	exit 1
+}
+
+# make sure required files exist
+[ ! -s "${UBOOT_ENV_BT_FILE}" ] && {
+	echo "U-Boot Enviroment file ${UBOOT_ENV_BT_FILE} not found - are you running the install image?" >&2
+	exit 1
+}
+
+[ ! -s "${UBOOT_ENV_PN_FILE}" ] && {
+	echo "U-Boot Enviroment file ${UBOOT_ENV_PN_FILE} not found - are you running the install image?" >&2
+	exit 1
+}
+
+echo ""
+echo "This script will erase parts of the Nand flash memory on this Hub, and then"
+echo "prepare it for running Sysupgrade."
+echo ""
+echo ""
+echo "WARNING: DO NOT CONTINUE unless you have saved a backup of the original firmware"
+echo "         to your COMPUTER or other storage device!"
+echo ""
+echo ""
+echo "DO NOT POWER OFF THE DEVICE DURING THIS PROCEDURE."
+echo ""
+echo ""
+echo "Please enter YESIHAVEABACKUP to continue:"
+
+read CONFIRMATION
+
+[ "${CONFIRMATION}" != "YESIHAVEABACKUP" ] && exit 0
+
+set -o pipefail
+
+echo ""
+echo "Starting installation..."
+
+# TODO: Add AES256 support to the u-boot env tools and try all known AES256 keys.
+echo ""
+echo "Please select you device:"
+echo ""
+echo "a) BT Home Hub 5 Type A"
+echo "b) Plusnet Hub One"
+echo ""
+read DEVICETYPE
+
+case $DEVICETYPE in
+	"a")
+		UBOOT_ENV_FILE=$UBOOT_ENV_BT_FILE
+		;;
+	"b")
+		UBOOT_ENV_FILE=$UBOOT_ENV_PN_FILE
+		;;
+	*)
+		echo "invalid option"
+		exit 1
+		;;
+esac
+
+# TODO: Use the AES256 enabled u-boot env tools to remove the silent flag and
+#       to set the correct bootcmd commands, instead of replacing the whole
+#       u-boot env.
+# setenv bootcmd ubi part UBI\; ubi read \$(loadaddr) kernel\; bootm \$(loadaddr)
+# setenv silent
+# saveenv
+echo ""
+echo "WRITING custom uboot-env to unlock u-boot console and update bootcmd..."
+flash_erase "/dev/mtd${UBOOT_ENV_PART_INDEX}" 0 0
+nandwrite "/dev/mtd${UBOOT_ENV_PART_INDEX}" "${UBOOT_ENV_FILE}"
+
+echo ""
+echo "REMOVING ubi volume OpenRG..."
+ubirmvol /dev/ubi0 --name=OpenRG
+
+echo ""
+echo "REMOVING ubi volume FFS..."
+ubirmvol /dev/ubi0 --name=FFS
+
+echo ""
+echo ""
+echo "Preparation completed!"
+echo ""
+echo "Your attached USB media is mounted as a subdirectory at /tmp/mounts/"
+echo ""
+echo "To install LEDE, run:"
+echo ""
+echo "  sysupgrade /tmp/mounts/<directory>/lede-lantiq-xrx200-BTHOMEHUBV5A-squashfs-sysupgrade.bin"
+echo ""
+echo "Sysupgrade will automatically restart your device when it has finished."
+echo "If the UART prompt appears, power-cycle your device!"
+echo "The hub should now boot up using LEDE."

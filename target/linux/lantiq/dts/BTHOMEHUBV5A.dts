@@ -43,12 +43,10 @@
 					partition@0 {
 						label = "u-boot";
 						reg = <0x0 0xa0000>;
-						read-only;
 					};
 					partition@a0000 {
 						label = "uboot-env";
 						reg = <0xa0000 0x20000>;
-						read-only;
 					};
 					partition@c0000 {
 						label = "unused";
@@ -61,6 +59,10 @@
 					/*
 					 * last 512 KiB are for the bad block table, not writable
 					 */
+					nand_chip {
+						label = "nand_chip";
+						reg = <0x0 0x8000000>;
+					};
 				};
 			};
 		};
@@ -248,8 +250,6 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 		reg = <1>;
-		mtd-mac-address = <&caldata 0x110c>;
-		mtd-mac-address-increment = <4>;
 		lantiq,wan;
 
 		ethernet@5 {
