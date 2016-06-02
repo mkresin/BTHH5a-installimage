@@ -30,18 +30,6 @@ alias ll='ls -alF --color=auto'
 	unset FILE
 }
 
-if ( grep -qs '^root::' /etc/shadow && \
-     [ -z "$FAILSAFE" ] )
-then
-cat << EOF
-=== WARNING! =====================================
-There is no root password defined on this device!
-Use the "passwd" command to set up a new password
-in order to prevent unauthorized SSH logins.
---------------------------------------------------
-EOF
-fi
-
 service() {
 	[ -f "/etc/init.d/$1" ] || {
 		echo "service "'"'"$1"'"'" not found, the following services are available:"

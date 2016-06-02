@@ -313,6 +313,10 @@
 +#define CONFIG_ENV_OVERWRITE
 +#define CONFIG_ENV_OFFSET		(640 * 1024)
 +#define CONFIG_ENV_SECT_SIZE		(128 * 1024)
++
++#undef CONFIG_BOOTCOMMAND
++#define CONFIG_BOOTCOMMAND \
++	"mtdparts default; ubi part UBI; ubi read ${loadaddr} kernel; bootm ${loadaddr}"
 +#else
 +#define CONFIG_ENV_IS_NOWHERE
 +#endif
@@ -333,10 +337,6 @@
 +
 +/* Pull in default OpenWrt configs for Lantiq SoC */
 +#include "openwrt-lantiq-common.h"
-+
-+#undef CONFIG_BOOTCOMMAND
-+#define CONFIG_BOOTCOMMAND \
-+	"mtdparts default; ubi part UBI; ubi read ${loadaddr} kernel; bootm ${loadaddr}"
 +
 +#define CONFIG_EXTRA_ENV_SETTINGS	\
 +	CONFIG_ENV_LANTIQ_DEFAULTS

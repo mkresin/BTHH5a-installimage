@@ -1,0 +1,159 @@
+#!/bin/sh
+# Copyright (C) 2016 Mathias Kresin <dev@kresin.me>
+
+. /lib/functions.sh
+
+# use the u-boot and u-boot env from bt for plusnet hub one as well
+UBOOT_FILE="/data/uboot.bin"
+UBOOT_ENV_FILE="/data/uboot-env_bt_patched.bin"
+
+# check for required binaries
+BINARIES="flash_erase hexdump nanddump nandwrite ubiattach ubidetach"
+for BINARY in ${BINARIES}; do
+	[ ! -x $(which ${BINARY}) ] && {
+		echo "${BINARY} not found - are you running the install image?" >&2
+		exit 1
+	}
+done
+
+# make sure expected partitions exist and are writable
+PART_NAME="u-boot"
+UBOOT_PART_INDEX=$(find_mtd_index "${PART_NAME}")
+[ -z "${UBOOT_PART_INDEX}" ] && {
+	echo "${PART_NAME} partition not found - something is wrong!" >&2
+	exit 1
+}
+
+[ $(cat /sys/class/block/mtdblock${UBOOT_PART_INDEX}/ro) -eq 1 ] && {
+	echo "${PART_NAME} partition not writable - are you running the install image?" >&2
+	exit 1
+}
+
+PART_NAME="uboot-env"
+UBOOT_ENV_PART_INDEX=$(find_mtd_index "${PART_NAME}")
+[ -z "${UBOOT_ENV_PART_INDEX}" ] && {
+	echo "${PART_NAME} partition not found - something is wrong!" >&2
+	exit 1
+}
+
+[ $(cat /sys/class/block/mtdblock${UBOOT_ENV_PART_INDEX}/ro) -eq 1 ] && {
+	echo "${PART_NAME} partition not writable - are you running the install image?" >&2
+	exit 1
+}
+
+PART_NAME="unused"
+UNUSED_PART_INDEX=$(find_mtd_index "${PART_NAME}")
+[ -z "${UNUSED_PART_INDEX}" ] && {
+	echo "${PART_NAME} partition not found - something is wrong!" >&2
+	exit 1
+}
+
+[ $(cat /sys/class/block/mtdblock${UNUSED_PART_INDEX}/ro) -eq 1 ] && {
+	echo "${PART_NAME} partition not writable - are you running the install image?" >&2
+	exit 1
+}
+
+PART_NAME="ubi"
+UBI_PART_INDEX=$(find_mtd_index "${PART_NAME}")
+[ -z "${UBI_PART_INDEX}" ] && {
+	echo "${PART_NAME} partition not found - something is wrong!" >&2
+	exit 1
+}
+
+[ $(cat /sys/class/block/mtdblock${UBI_PART_INDEX}/ro) -eq 1 ] && {
+	echo "${PART_NAME} partition not writable - something is wrong!" >&2
+	exit 1
+}
+
+# make sure required files exist
+[ ! -s "${UBOOT_FILE}" ] && {
+	echo "U-Boot file ${UBOOT_FILE} not found - are you running the install image?" >&2
+	exit 1
+}
+
+[ ! -s "${UBOOT_ENV_FILE}" ] && {
+	echo "U-Boot Enviroment file ${UBOOT_ENV_FILE} not found - are you running the install image?" >&2
+	exit 1
+}
+
+# make sure the required bits are present on the flash
+[ "$(nanddump -q -s 0x81000 /dev/mtd${UBOOT_PART_INDEX} | hexdump -v -n 2 -e '1/1 "%02x"')" != "a55a" ] && {
+	echo "Caldata not found on flash. Sorry, there is nothing we can do for you!" >&2
+	exit 1
+}
+
+echo "This script should be only used as a LAST RESORT to migrate to the new LEDE"
+echo "partition layout if you have no backup, or you cannot restore the stock firmware"
+echo "for any other reason."
+echo ""
+echo "DISCLAIMER: Use this script at your own risk. Very limited testing has been"
+echo "            completed for this script. It is offered with no guarantee of"
+echo "            success."
+echo ""
+echo "You are strongly advised to use the 'restore' and 'prepare' scripts to"
+echo "restore the stock firmware, and then to install LEDE."
+echo ""
+echo ""
+echo "WARNING: DO NOT CONTINUE unless you have saved a backup of the current running"
+echo "         firmware to your COMPUTER or other storage device!"
+echo ""
+echo ""
+
+read -p "Please enter YESIHAVEABACKUP to continue: " CONFIRMATION
+[ "${CONFIRMATION}" != "YESIHAVEABACKUP" ] && exit 0
+
+set -o pipefail
+
+echo ""
+echo "STARTING migration..."
+
+echo "DETACHING ubi partition..."
+# hide any error messages to not confuse users in case the ubi volume isn't at
+# the expected position or doesn't exist at all
+ubidetach -m "${UBI_PART_INDEX}" 2>/dev/null
+
+echo ""
+echo "FORMATING ubi partition"
+ubiformat "/dev/mtd${UBI_PART_INDEX}" -y
+
+NAND_UBI_DEV_ID=0
+echo ""
+echo "ATTACHING ubi partition to ubi dev number ${NAND_UBI_DEV_ID} using"
+echo "19 reserved blocks for bad block handling"
+ubiattach -m "${UBI_PART_INDEX}" -d "${NAND_UBI_DEV_ID}" --max-beb-per1024=19
+
+UBI_VOL_NAME="caldata"
+echo ""
+echo "COPYING caldata to ${UBI_VOL_NAME} ubi volume"
+UBI_VOL_SIZE=129024
+UBI_VOL_ID=3
+ubimkvol /dev/ubi"${NAND_UBI_DEV_ID}" -n "${UBI_VOL_ID}" -N "${UBI_VOL_NAME}" -s "${UBI_VOL_SIZE}"
+nanddump -s 0x80000 -l 0x20000 "/dev/mtd${UBOOT_PART_INDEX}" | \
+	ubiupdatevol /dev/ubi"${NAND_UBI_DEV_ID}"_"${UBI_VOL_ID}" -s "${UBI_VOL_SIZE}" -
+
+echo ""
+echo "RESTORING u-boot partition from ${UBOOT_FILE}"
+flash_erase "/dev/mtd${UBOOT_PART_INDEX}" 0 0
+nandwrite -m "/dev/mtd${UBOOT_PART_INDEX}" "${UBOOT_FILE}"
+
+echo ""
+echo "RESTORING u-boot env partition from ${UBOOT_ENV_FILE} (unlocked u-boot console and update bootcmd)"
+flash_erase "/dev/mtd${UBOOT_ENV_PART_INDEX}" 0 0
+nandwrite -m "/dev/mtd${UBOOT_ENV_PART_INDEX}" "${UBOOT_ENV_FILE}"
+
+echo ""
+echo "FORMATING unused partition"
+flash_erase "/dev/mtd${UNUSED_PART_INDEX}" 0 0
+
+echo ""
+echo "Migration finished!"
+echo ""
+echo "Your attached USB media is mounted as a subdirectory at /tmp/mounts/"
+echo ""
+echo "To install LEDE, run:"
+echo ""
+echo "  sysupgrade /tmp/mounts/<directory>/lede-17.01.4-lantiq-xrx200-BTHOMEHUBV5A-squashfs-sysupgrade.bin"
+echo ""
+echo "Sysupgrade will automatically restart your device when it has finished."
+echo "If the CFG-04 UART prompt appears, power-cycle your device!"
+echo "The hub should now boot up using LEDE."

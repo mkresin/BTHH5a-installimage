@@ -1,0 +1,168 @@
+#!/bin/sh
+# Copyright (C) 2016 Mathias Kresin <dev@kresin.me>
+
+. /lib/functions.sh
+
+# remove debug output from serial console
+echo 5 > /proc/sys/kernel/printk
+
+# check for required binaries
+BINARIES="insmod flash_erase nandwrite ubirmvol nanddump openssl nandwrite fw_printenv fw_setenv"
+for BINARY in ${BINARIES}; do
+	[ ! -x $(which ${BINARY}) ] && {
+		echo "${BINARY} not found - are you running the install image?" >&2
+		exit 1
+	}
+done
+
+# make sure expected partitions exist and are writable
+PART_NAME="ubi"
+UBI_PART_INDEX=$(find_mtd_index "${PART_NAME}")
+[ -z "${UBI_PART_INDEX}" ] && {
+	echo "${PART_NAME} partition not found - something is wrong!" >&2
+	exit 1
+}
+
+[ $(cat /sys/class/block/mtdblock${UBI_PART_INDEX}/ro) -eq 1 ] && {
+	echo "${PART_NAME} partition not writable - something is wrong!" >&2
+	exit 1
+}
+
+PART_NAME="uboot-env"
+UBOOT_ENV_PART_INDEX=$(find_mtd_index "${PART_NAME}")
+[ -z "${UBOOT_ENV_PART_INDEX}" ] && {
+	echo "${PART_NAME} partition not found - something is wrong!" >&2
+	exit 1
+}
+
+[ $(cat /sys/class/block/mtdblock${UBOOT_ENV_PART_INDEX}/ro) -eq 1 ] && {
+	echo "${PART_NAME} partition not writable - are you running the install image?" >&2
+	exit 1
+}
+
+# cleanup nandsim state
+rmmod nandsim &>/dev/null
+
+# create 16 MByte virtual nand chip in RAM
+insmod nandsim first_id_byte=0x20 second_id_byte=0x33 parts=8 >/dev/null
+PART_NAME="NAND simulator partition 0"
+NANDSIM_UBOOT_ENV_PART_INDEX=$(find_mtd_index "${PART_NAME}")
+[ -z "${NANDSIM_UBOOT_ENV_PART_INDEX}" ] && {
+	echo "ERROR ${PART_NAME} partition not found - something is wrong!" >&2
+	exit 1
+}
+
+echo ""
+echo "This script will erase parts of the Nand flash memory on this Hub, and then"
+echo "prepare it for running Sysupgrade."
+echo ""
+echo ""
+echo "WARNING: DO NOT CONTINUE unless you have saved a backup of the original firmware"
+echo "         to your COMPUTER or other storage device!"
+echo ""
+echo ""
+echo "DO NOT POWER OFF THE DEVICE DURING THIS PROCEDURE."
+echo ""
+echo ""
+
+read -p "Please enter YESIHAVEABACKUP to continue: " CONFIRMATION
+[ "${CONFIRMATION}" != "YESIHAVEABACKUP" ] && exit 0
+
+set -o pipefail
+
+echo ""
+echo "Starting installation..."
+
+# configure fw_printenv
+echo "/dev/mtd${NANDSIM_UBOOT_ENV_PART_INDEX} 0x0000 0x20000 0x4000" > /etc/fw_env.config
+
+# BT BusinessHub 5a
+# Plusnet Hub One
+# BT HomeHub 5a
+KNOWN_KEYS="B1D3B4BD0970FCA9261E23C2170DB8E52407C71DAC06098678C0885BC7E68CCD \
+	86fd5557bab554172a97eaec65680745d4ec2efe723decb956a50bd9bc13e1a8 \
+	3E4CA8114D15BFC653B2BF9519EF2B94200E30345503B125C1D0BE776698B950"
+
+for key in $KNOWN_KEYS; do
+	echo "TRYING to decrypt u-boot env with key $key"
+
+	# decrypt aes-256-cbc encrypted u-boot env and store to temporary mtd
+	# blockdevice to manipulate it using the u-boot env tools
+	flash_erase -q "/dev/mtd${NANDSIM_UBOOT_ENV_PART_INDEX}" 0 0
+
+	nanddump -q "/dev/mtd${UBOOT_ENV_PART_INDEX}" | \
+	openssl enc -d -aes-256-cbc \
+		-K $key \
+		-iv 00000000000000000000000000000000 -nopad | \
+	nandwrite -q "/dev/mtd${NANDSIM_UBOOT_ENV_PART_INDEX}"
+
+	BOOTCMD=$(fw_printenv -n bootcmd 2>/dev/null)
+	[ -n "$BOOTCMD" ] && {
+		echo "SUCCESSFULLY decrypted u-boot env"
+		break
+	}
+done
+
+if [ -z "$BOOTCMD" ]
+then
+	echo "WARNING: U-boot environment could not be decrypted!"
+	echo ""
+	echo "'bootcmd' will be reset to default values.  When the HH5A starts up after"
+	echo "installing LEDE, the boot process will halt at the VR9# u-boot prompt."
+	echo ""
+	echo "To update 'bootcmd' variable refer to the guide on the web page hosting the"
+	echo "install image."
+	echo ""
+	flash_erase "/dev/mtd${UBOOT_ENV_PART_INDEX}" 0 0
+
+	read -p "Press any key to continue..."
+else
+	fw_printenv -n bootcmd_openrg &>/dev/null && {
+		echo "ERROR bootcmd_openrg already exists. Please restore backup and start again" >&2
+		exit 1
+	}
+
+	echo ""
+	echo "BACKING UP original bootcmd in u-boot env"
+	fw_setenv bootcmd_openrg "$BOOTCMD"
+
+	echo "SETTING custom bootcmd in u-boot env"
+	fw_setenv bootcmd 'ubi part UBI; ubi read $(loadaddr) kernel; bootm $(loadaddr)'
+
+	echo "UNLOCKING u-boot prompt"
+	fw_setenv silent
+
+	echo ""
+	echo "FLASHING updated encrypted u-boot env"
+	flash_erase "/dev/mtd${UBOOT_ENV_PART_INDEX}" 0 0
+	nanddump -q "/dev/mtd${NANDSIM_UBOOT_ENV_PART_INDEX}" | \
+	openssl enc -aes-256-cbc \
+		-K $key \
+		-iv 00000000000000000000000000000000 -nopad | \
+	nandwrite -m "/dev/mtd${UBOOT_ENV_PART_INDEX}"
+fi
+
+# cleanup nandsim state
+rmmod nandsim &>/dev/null
+
+echo ""
+echo "REMOVING ubi volume OpenRG..."
+ubirmvol /dev/ubi0 --name=OpenRG
+
+echo ""
+echo "REMOVING ubi volume FFS..."
+ubirmvol /dev/ubi0 --name=FFS
+
+echo ""
+echo ""
+echo "Preparation completed!"
+echo ""
+echo "Your attached USB media is mounted as a subdirectory at /tmp/mounts/"
+echo ""
+echo "To install LEDE, run:"
+echo ""
+echo "  sysupgrade /tmp/mounts/<directory>/lede-17.01.4-lantiq-xrx200-BTHOMEHUBV5A-squashfs-sysupgrade.bin"
+echo ""
+echo "Sysupgrade will automatically restart your device when it has finished."
+echo "If the CFG-04 UART prompt appears, power-cycle your device!"
+echo "The hub should now boot up using LEDE."

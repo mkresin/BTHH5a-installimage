@@ -508,3 +508,12 @@ define KernelPackage/scsi-tape
 endef
 
 $(eval $(call KernelPackage,scsi-tape))
+
+define KernelPackage/nandsim
+  SUBMENU:=$(BLOCK_MENU)
+  TITLE:=NAND Flash Simulator
+  KCONFIG:=CONFIG_MTD_NAND_NANDSIM
+  FILES:=$(LINUX_DIR)/drivers/mtd/nand/nandsim.ko
+endef
+
+$(eval $(call KernelPackage,nandsim))

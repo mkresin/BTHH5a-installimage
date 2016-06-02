@@ -1,0 +1,52 @@
+From 504e5215f2f76d2a35ee4c8691b55ad28ace9813 Mon Sep 17 00:00:00 2001
+From: Mathias Kresin <dev@kresin.me>
+Date: Sun, 12 Jun 2016 10:54:32 +0200
+Subject: [PATCH] mtd: nandsim: use the existing output macros
+
+Without using the output macros, it isn't possible to suppress these
+messages on the console by specifying an appropriate console log level.
+
+Signed-off-by: Mathias Kresin <dev@kresin.me>
+---
+ drivers/mtd/nand/nandsim.c | 28 ++++++++++++++--------------
+ 1 file changed, 14 insertions(+), 14 deletions(-)
+
+--- a/drivers/mtd/nand/nandsim.c
++++ b/drivers/mtd/nand/nandsim.c
+@@ -769,22 +769,22 @@ static int init_nandsim(struct mtd_info
+ 	if (ns->busw == 16)
+ 		NS_WARN("16-bit flashes support wasn't tested\n");
+ 
+-	printk("flash size: %llu MiB\n",
++	NS_INFO("flash size: %llu MiB\n",
+ 			(unsigned long long)ns->geom.totsz >> 20);
+-	printk("page size: %u bytes\n",         ns->geom.pgsz);
+-	printk("OOB area size: %u bytes\n",     ns->geom.oobsz);
+-	printk("sector size: %u KiB\n",         ns->geom.secsz >> 10);
+-	printk("pages number: %u\n",            ns->geom.pgnum);
+-	printk("pages per sector: %u\n",        ns->geom.pgsec);
+-	printk("bus width: %u\n",               ns->busw);
+-	printk("bits in sector size: %u\n",     ns->geom.secshift);
+-	printk("bits in page size: %u\n",       ns->geom.pgshift);
+-	printk("bits in OOB size: %u\n",	ffs(ns->geom.oobsz) - 1);
+-	printk("flash size with OOB: %llu KiB\n",
++	NS_INFO("page size: %u bytes\n",         ns->geom.pgsz);
++	NS_INFO("OOB area size: %u bytes\n",     ns->geom.oobsz);
++	NS_INFO("sector size: %u KiB\n",         ns->geom.secsz >> 10);
++	NS_INFO("pages number: %u\n",            ns->geom.pgnum);
++	NS_INFO("pages per sector: %u\n",        ns->geom.pgsec);
++	NS_INFO("bus width: %u\n",               ns->busw);
++	NS_INFO("bits in sector size: %u\n",     ns->geom.secshift);
++	NS_INFO("bits in page size: %u\n",       ns->geom.pgshift);
++	NS_INFO("bits in OOB size: %u\n",	ffs(ns->geom.oobsz) - 1);
++	NS_INFO("flash size with OOB: %llu KiB\n",
+ 			(unsigned long long)ns->geom.totszoob >> 10);
+-	printk("page address bytes: %u\n",      ns->geom.pgaddrbytes);
+-	printk("sector address bytes: %u\n",    ns->geom.secaddrbytes);
+-	printk("options: %#x\n",                ns->options);
++	NS_INFO("page address bytes: %u\n",      ns->geom.pgaddrbytes);
++	NS_INFO("sector address bytes: %u\n",    ns->geom.secaddrbytes);
++	NS_INFO("options: %#x\n",                ns->options);
+ 
+ 	if ((ret = alloc_device(ns)) != 0)
+ 		return ret;

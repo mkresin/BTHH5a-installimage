@@ -1,0 +1,299 @@
+#!/bin/sh
+# Copyright (C) 2016 Mathias Kresin <dev@kresin.me>
+
+# remove debug output from serial console
+echo 5 > /proc/sys/kernel/printk
+
+. /lib/functions.sh
+
+NAND_UBI_DEV_ID=0
+NANDSIM_UBI_DEV_ID=9
+
+[ -z $1 ] && {
+	echo "Please specify the path to the NANDdump backup file for the stock firmware"
+	echo "which was created during the initial installation procedure!"
+	echo ""
+	echo "Usage: `basename $0` /tmp/mounts/<directory>/hh5a.nanddump"
+	exit 1
+}
+
+[ ! -f "$1" ] && {
+	echo "NANDdump Backup file $1 not found" >&2
+	exit 1
+}
+
+# check for required binaries
+BINARIES="insmod dd flash_erase nandwrite ubiattach ubidetach nanddump openssl fw_printenv fw_setenv"
+for BINARY in ${BINARIES}; do
+	[ ! -x $(which ${BINARY}) ] && {
+		echo "${BINARY} not found - are you running the install image?" >&2
+		exit 1
+	}
+done
+
+# make sure expected partitions exist and are writable
+PART_NAME="u-boot"
+UBOOT_PART_INDEX=$(find_mtd_index "${PART_NAME}")
+[ -z "${UBOOT_PART_INDEX}" ] && {
+	echo "${PART_NAME} partition not found - something is wrong!" >&2
+	exit 1
+}
+
+[ $(cat /sys/class/block/mtdblock${UBOOT_PART_INDEX}/ro) -eq 1 ] && {
+	echo "${PART_NAME} partition not writable - are you running the install image?" >&2
+	exit 1
+}
+
+PART_NAME="uboot-env"
+UBOOT_ENV_PART_INDEX=$(find_mtd_index "${PART_NAME}")
+[ -z "${UBOOT_ENV_PART_INDEX}" ] && {
+	echo "${PART_NAME} partition not found - something is wrong!" >&2
+	exit 1
+}
+
+[ $(cat /sys/class/block/mtdblock${UBOOT_ENV_PART_INDEX}/ro) -eq 1 ] && {
+	echo "${PART_NAME} partition not writable - are you running the install image?" >&2
+	exit 1
+}
+
+PART_NAME="unused"
+UNUSED_PART_INDEX=$(find_mtd_index "${PART_NAME}")
+[ -z "${UNUSED_PART_INDEX}" ] && {
+	echo "${PART_NAME} partition not found - something is wrong!" >&2
+	exit 1
+}
+
+[ $(cat /sys/class/block/mtdblock${UNUSED_PART_INDEX}/ro) -eq 1 ] && {
+	echo "${PART_NAME} partition not writable - are you running the install image?" >&2
+	exit 1
+}
+
+PART_NAME="ubi"
+UBI_PART_INDEX=$(find_mtd_index "${PART_NAME}")
+[ -z "${UBI_PART_INDEX}" ] && {
+	echo "${PART_NAME} partition not found - something is wrong!" >&2
+	exit 1
+}
+
+[ $(cat /sys/class/block/mtdblock${UBI_PART_INDEX}/ro) -eq 1 ] && {
+	echo "${PART_NAME} partition not writable - something is wrong!" >&2
+	exit 1
+}
+
+PART_NAME="nand_chip"
+NANDCHIP_PART_INDEX=$(find_mtd_index "${PART_NAME}")
+[ -z "${NANDCHIP_PART_INDEX}" ] && {
+	echo "${PART_NAME} partition not found - are you running the install image?" >&2
+	exit 1
+}
+
+# cleanup nandsim state
+ubidetach -d 9 &>/dev/null
+rmmod nandsim &>/dev/null
+
+# check for enough free space on mounted device
+NANDSIM_CACHE_FILE_DIR=$(dirname "${1}")
+FREE_DISK_SPACE=$(df -k "${NANDSIM_CACHE_FILE_DIR}" | awk '/[0-9]%/{print $(NF-2)}')
+
+[ ${FREE_DISK_SPACE} -lt 134112 ] && {
+	echo "Unable to continue. There must be at least 134112 KiB free disk space on the USB drive." >&2
+	exit 1
+}
+
+# creating temp file for nandsim file backend
+NANDSIM_CACHE_FILE=$(mktemp -p "${NANDSIM_CACHE_FILE_DIR}" nandsim.XXXXXX)
+[ -z "${NANDSIM_CACHE_FILE}" ] || [ ! -f "${NANDSIM_CACHE_FILE}" ] && {
+	echo "Unable to create required temporary file" >&2
+	exit 1
+}
+
+# create virtual nand chip, backed by a file
+insmod nandsim cache_file="${NANDSIM_CACHE_FILE}" \
+				first_id_byte=0xec second_id_byte=0xa1 \
+				third_id_byte=0x00 fourth_id_byte=0x15 \
+				parts=1016 >/dev/null
+
+NANDSIM_UBI_PART_INDEX=$(find_mtd_index "NAND simulator partition 0")
+[ -z "${NANDSIM_UBI_PART_INDEX}" ] && {
+	echo "Virtual Nand partition not found - are you running the install image?" >&2
+	exit 1
+}
+
+echo ""
+echo "This script will erase the Nand flash memory, and then attempt to restore the"
+echo "stock firmware to this Hub."
+echo ""
+echo ""
+echo "WARNING: You may wish to make a backup of the current running firmware"
+echo "         and save it to your COMPUTER or other storage device before"
+echo "         continuing."
+echo ""
+echo "IMPORTANT: You MUST use the original hh5a.nanddump backup file originally"
+echo "           created from this Hub. Do not use a backup file from any other Hub"
+echo "           to avoid issues like bad WiFi perfomance because of not matching"
+echo "           WiFi calibration data."
+echo ""
+echo ""
+echo "DO NOT POWER OFF THE DEVICE DURING THIS RESTORE PROCESS!"
+echo ""
+echo "Up to 1 hour is required to complete this process."
+echo ""
+
+read -p "Please enter YESRESTORE to continue: " CONFIRMATION
+[ "${CONFIRMATION}" != "YESRESTORE" ] && exit 0
+
+set -o pipefail
+
+echo ""
+echo "COPYING data to virtual nand chip"
+nandwrite --input-skip=1048576 "/dev/mtd${NANDSIM_UBI_PART_INDEX}" $1
+
+echo ""
+echo "ATTACHING backup ubi partition to ubi dev number ${NANDSIM_UBI_DEV_ID}"
+ubiattach -m "${NANDSIM_UBI_PART_INDEX}" -d "${NANDSIM_UBI_DEV_ID}"
+
+echo ""
+echo "DETACHING nand ubi partition..."
+# hide any error messages to not confuse users in case the ubi volume isn't at
+# the expected position or doesn't exist at all
+ubidetach -m "${UBI_PART_INDEX}" 2>/dev/null
+
+echo ""
+echo "RESTORING u-boot partition from backup"
+flash_erase "/dev/mtd${UBOOT_PART_INDEX}" 0 0
+nandwrite -m --input-size=655360 "/dev/mtd${UBOOT_PART_INDEX}" "$1"
+
+echo ""
+echo "RESTORING u-boot env partition from backup"
+flash_erase "/dev/mtd${UBOOT_ENV_PART_INDEX}" 0 0
+nandwrite -m --input-skip=655360 --input-size=131072 "/dev/mtd${UBOOT_ENV_PART_INDEX}" $1
+
+echo ""
+echo "RESTORING unused partition from backup"
+flash_erase "/dev/mtd${UNUSED_PART_INDEX}" 0 0
+nandwrite -m --input-skip=786432 --input-size=262144 "/dev/mtd${UNUSED_PART_INDEX}" $1
+
+echo ""
+echo "FORMATING nand ubi partition"
+ubiformat "/dev/mtd${UBI_PART_INDEX}" -y
+
+echo ""
+echo "ATTACHING nand ubi partition to ubi dev number ${NAND_UBI_DEV_ID} using"
+echo "19 reserved blocks for bad block handling"
+ubiattach -m "${UBI_PART_INDEX}" -d "${NAND_UBI_DEV_ID}" --max-beb-per1024=19
+
+UBI_VOL_NAME="OpenRG"
+echo ""
+echo "RESTORING ${UBI_VOL_NAME} ubi volume from backup"
+UBI_VOL_SIZE=42061824
+UBI_VOL_ID=1
+ubimkvol /dev/ubi"${NAND_UBI_DEV_ID}" -n "${UBI_VOL_ID}" -N "${UBI_VOL_NAME}" -s "${UBI_VOL_SIZE}"
+dd if=/dev/ubi"${NANDSIM_UBI_DEV_ID}"_"${UBI_VOL_ID}" bs=2048 | \
+	ubiupdatevol /dev/ubi"${NAND_UBI_DEV_ID}"_"${UBI_VOL_ID}" -s "${UBI_VOL_SIZE}" -
+
+UBI_VOL_NAME="FFS"
+echo ""
+echo "RESTORING ${UBI_VOL_NAME} ubi volume from backup"
+UBI_VOL_SIZE=85413888
+UBI_VOL_ID=2
+ubimkvol /dev/ubi"${NAND_UBI_DEV_ID}" -n "${UBI_VOL_ID}" -N "${UBI_VOL_NAME}" -s "${UBI_VOL_SIZE}"
+dd if=/dev/ubi"${NANDSIM_UBI_DEV_ID}"_"${UBI_VOL_ID}" bs=2048 | \
+	ubiupdatevol /dev/ubi"${NAND_UBI_DEV_ID}"_"${UBI_VOL_ID}" -s "${UBI_VOL_SIZE}" -
+
+UBI_VOL_NAME="caldata"
+echo ""
+echo "RESTORING ${UBI_VOL_NAME} ubi volume from backup"
+UBI_VOL_SIZE=129024
+UBI_VOL_ID=3
+ubimkvol /dev/ubi"${NAND_UBI_DEV_ID}" -n "${UBI_VOL_ID}" -N "${UBI_VOL_NAME}" -s "${UBI_VOL_SIZE}"
+dd if=/dev/ubi"${NANDSIM_UBI_DEV_ID}"_"${UBI_VOL_ID}" bs=2048 | \
+	ubiupdatevol /dev/ubi"${NAND_UBI_DEV_ID}"_"${UBI_VOL_ID}" -s "${UBI_VOL_SIZE}" -
+
+# cleanup nandsim state
+ubidetach -d 9 &>/dev/null
+rmmod nandsim &>/dev/null
+rm "${NANDSIM_CACHE_FILE}"
+
+echo ""
+echo "Do you wish to unlock the u-boot prompt? This will allow use of tftpboot etc."
+echo ""
+
+read -p "Unlock [y/N]: " UNLOCK
+echo ""
+
+if [ "${UNLOCK}" = "y" ]
+then
+	# create 16 MByte virtual nand chip in RAM
+	insmod nandsim first_id_byte=0x20 second_id_byte=0x33 parts=8 >/dev/null
+	PART_NAME="NAND simulator partition 0"
+	NANDSIM_UBOOT_ENV_PART_INDEX=$(find_mtd_index "${PART_NAME}")
+	[ -z "${NANDSIM_UBOOT_ENV_PART_INDEX}" ] && {
+		echo "ERROR ${PART_NAME} partition not found - something is wrong!" >&2
+		exit 1
+	}
+
+	# configure fw_printenv
+	echo "/dev/mtd${NANDSIM_UBOOT_ENV_PART_INDEX} 0x0000 0x20000 0x4000" > /etc/fw_env.config
+
+	# BT BusinessHub 5a
+	# Plusnet Hub One
+	# BT HomeHub 5a
+	KNOWN_KEYS="B1D3B4BD0970FCA9261E23C2170DB8E52407C71DAC06098678C0885BC7E68CCD \
+		86fd5557bab554172a97eaec65680745d4ec2efe723decb956a50bd9bc13e1a8 \
+		3E4CA8114D15BFC653B2BF9519EF2B94200E30345503B125C1D0BE776698B950"
+
+	for key in $KNOWN_KEYS; do
+		echo "TRYING to decrypt u-boot env with key $key"
+
+		# decrypt aes-256-cbc encrypted u-boot env and store to temporary mtd
+		# blockdevice to manipulate it using the u-boot env tools
+		flash_erase -q "/dev/mtd${NANDSIM_UBOOT_ENV_PART_INDEX}" 0 0
+
+		nanddump -q "/dev/mtd${UBOOT_ENV_PART_INDEX}" | \
+		openssl enc -d -aes-256-cbc \
+			-K $key \
+			-iv 00000000000000000000000000000000 -nopad | \
+		nandwrite -q "/dev/mtd${NANDSIM_UBOOT_ENV_PART_INDEX}"
+
+		BOOTCMD=$(fw_printenv -n bootcmd 2>/dev/null)
+		[ -n "$BOOTCMD" ] && {
+			echo "SUCCESSFULLY decrypted u-boot env"
+			break
+		}
+	done
+
+	if [ -z "$BOOTCMD" ]
+	then
+		echo "WARNING: U-Boot environment could not be decrypted! Will reset the"
+		echo "         complete U-Boot environment instead."
+		flash_erase "/dev/mtd${UBOOT_ENV_PART_INDEX}" 0 0
+	else
+		echo ""
+		echo "UNLOCKING u-boot prompt"
+		fw_setenv silent
+
+		echo "FLASHING updated encrypted u-boot env"
+		flash_erase "/dev/mtd${UBOOT_ENV_PART_INDEX}" 0 0
+		nanddump -q "/dev/mtd${NANDSIM_UBOOT_ENV_PART_INDEX}" | \
+		openssl enc -aes-256-cbc \
+			-K $key \
+			-iv 00000000000000000000000000000000 -nopad | \
+		nandwrite -m "/dev/mtd${UBOOT_ENV_PART_INDEX}"
+	fi
+
+	# cleanup nandsim state
+	rmmod nandsim &>/dev/null
+fi
+
+echo ""
+echo "Restoration completed!"
+echo ""
+echo ""
+echo "To prepare the system for installing LEDE. You may run:"
+echo ""
+echo "  prepare"
+echo ""
+echo ""
+echo "Otherwise, type 'reboot'!"
+echo "If the UART prompt appears, power-cycle your device!"
+echo "The hub should now boot up using the stock firmware."

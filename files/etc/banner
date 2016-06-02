@@ -1,0 +1,36 @@
+*******************************************************************************
+*        Guide for installing LEDE onto a BT Home Hub 5 Type A & clones       *
+*******************************************************************************
+
+You need an USB flash drive with at least 512MB free capacity, formatted as
+FAT32, exFAT or ext2/3/4, attached to the Hub. The attached flash drive will be
+accessible at /tmp/mounts/<directory>.
+
+To install LEDE, the USB flash drive must have a copy of the file:
+  lede-17.01.4-lantiq-xrx200-BTHOMEHUBV5A-squashfs-sysupgrade.bin
+
+To restore the stock Firmware, the USB flash drive must have a copy of the
+nanddump backup file (hh5a.nanddump) containing the stock Firmware.
+
+LIST OF COMMANDS
+
+  To create a backup of the installed firmware (Take care to not overwrite
+  any previously made backup):
+      nanddump --file /tmp/mounts/<directory>/hh5a.nanddump /dev/mtd4
+
+  To install LEDE:
+      prepare
+
+  To restore stock firmware:
+      restore
+
+TO UPGRADE FROM OpenWrt OR LEDE PRIOR TO r2363-0e34459e6b:
+
+  Restore the stock firmware and do a fresh install of LEDE.
+
+If you don't have a backup of the stock firmware from your Hub, use the
+experimental 'migrate' script. It is offered with no guarantee of success. 
+You are strongly advised to restore the stock firmware.
+
+Please scroll back to view ALL of the above instructions.
+

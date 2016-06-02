@@ -476,6 +476,7 @@ TARGET_DEVICES += ARV7519RW22
 
 define Device/BTHOMEHUBV5A
   $(Device/NAND)
+  KERNEL_INITRAMFS := kernel-bin | append-dtb | uImage none
   DEVICE_TITLE := BT Home Hub 5A
   DEVICE_PACKAGES := kmod-ath9k kmod-owl-loader \
 	kmod-ath10k ath10k-firmware-qca988x wpad-mini kmod-usb-dwc2
