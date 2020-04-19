@@ -182,32 +182,18 @@ echo "ATTACHING nand ubi partition to ubi dev number ${NAND_UBI_DEV_ID} using"
 echo "19 reserved blocks for bad block handling"
 ubiattach -m "${UBI_PART_INDEX}" -d "${NAND_UBI_DEV_ID}" --max-beb-per1024=19
 
-UBI_VOL_NAME="OpenRG"
-echo ""
-echo "RESTORING ${UBI_VOL_NAME} ubi volume from backup"
-UBI_VOL_SIZE=42061824
-UBI_VOL_ID=1
-ubimkvol /dev/ubi"${NAND_UBI_DEV_ID}" -n "${UBI_VOL_ID}" -N "${UBI_VOL_NAME}" -s "${UBI_VOL_SIZE}"
-dd if=/dev/ubi"${NANDSIM_UBI_DEV_ID}"_"${UBI_VOL_ID}" bs=2048 | \
-	ubiupdatevol /dev/ubi"${NAND_UBI_DEV_ID}"_"${UBI_VOL_ID}" -s "${UBI_VOL_SIZE}" -
+ALLVOLS=`ubinfo -d "${NANDSIM_UBI_DEV_ID}" | grep 'Present volumes' | sed 's/Present volumes://g' | sed 's/ //g' | sed 's/,/\n/g'`
 
-UBI_VOL_NAME="FFS"
-echo ""
-echo "RESTORING ${UBI_VOL_NAME} ubi volume from backup"
-UBI_VOL_SIZE=85413888
-UBI_VOL_ID=2
-ubimkvol /dev/ubi"${NAND_UBI_DEV_ID}" -n "${UBI_VOL_ID}" -N "${UBI_VOL_NAME}" -s "${UBI_VOL_SIZE}"
-dd if=/dev/ubi"${NANDSIM_UBI_DEV_ID}"_"${UBI_VOL_ID}" bs=2048 | \
-	ubiupdatevol /dev/ubi"${NAND_UBI_DEV_ID}"_"${UBI_VOL_ID}" -s "${UBI_VOL_SIZE}" -
-
-UBI_VOL_NAME="caldata"
-echo ""
-echo "RESTORING ${UBI_VOL_NAME} ubi volume from backup"
-UBI_VOL_SIZE=129024
-UBI_VOL_ID=3
-ubimkvol /dev/ubi"${NAND_UBI_DEV_ID}" -n "${UBI_VOL_ID}" -N "${UBI_VOL_NAME}" -s "${UBI_VOL_SIZE}"
-dd if=/dev/ubi"${NANDSIM_UBI_DEV_ID}"_"${UBI_VOL_ID}" bs=2048 | \
-	ubiupdatevol /dev/ubi"${NAND_UBI_DEV_ID}"_"${UBI_VOL_ID}" -s "${UBI_VOL_SIZE}" -
+for vol in $ALLVOLS; do
+	UBI_VOL_NAME=`ubinfo -d "${NANDSIM_UBI_DEV_ID}" -n $vol | grep Name | sed "s/Name:[ ]*//g"`
+	UBI_VOL_SIZE=`ubinfo -d "${NANDSIM_UBI_DEV_ID}" -n $vol | grep Size | sed "s/Size:.*(//g" | sed "s/ .*//g"`
+	UBI_VOL_ID=$vol
+	echo ""
+	echo "RESTORING ${UBI_VOL_NAME} ubi volume from backup"
+	ubimkvol /dev/ubi"${NAND_UBI_DEV_ID}" -n "${UBI_VOL_ID}" -N "${UBI_VOL_NAME}" -s "${UBI_VOL_SIZE}"
+	dd if=/dev/ubi"${NANDSIM_UBI_DEV_ID}"_"${UBI_VOL_ID}" bs=2048 | \
+		ubiupdatevol /dev/ubi"${NAND_UBI_DEV_ID}"_"${UBI_VOL_ID}" -s "${UBI_VOL_SIZE}" -
+done
 
 # cleanup nandsim state
 ubidetach -d 9 &>/dev/null
